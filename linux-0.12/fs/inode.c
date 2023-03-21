@@ -127,6 +127,7 @@ static int _bmap(struct m_inode * inode, int block, int create)
 	}
 	/* block >= 直接块数 + 间接块数 + 二次间接块数 */
 	if (block >= 7 + 512 + 512 * 512) {
+        __asm_br(__bmap);
 		panic("_bmap: block>big");
 	}
 	

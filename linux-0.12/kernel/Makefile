@@ -21,6 +21,10 @@ CPP	+= -E -I../include
 	$(CC) $(CFLAGS) \
 	-c -o $*.o $<
 
+.S.s:
+	$(CPP) -D__ASSEMBLY__ -I../include -o $@ $<
+
+
 OBJS  = sched.o sys_call.o traps.o asm.o fork.o \
 	panic.o printk.o vsprintf.o sys.o exit.o \
 	signal.o mktime.o
@@ -29,8 +33,11 @@ kernel.o: $(OBJS)
 	$(LD) -m elf_i386 -r -o kernel.o $(OBJS)
 	@sync
 
+
+sys_call.s: sys_call.S
+
 clean:
-	rm -f core *.o *.a tmp_make keyboard.s
+	rm -f core *.o *.a tmp_make keyboard.s sys_call.s
 	for i in *.c;do rm -f `basename $$i .c`.s;done
 	(cd chr_drv; make clean)
 	(cd blk_drv; make clean)

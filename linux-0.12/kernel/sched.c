@@ -22,6 +22,7 @@
 #include <asm/system.h>
 #include <asm/io.h>
 #include <asm/segment.h>
+#include <string.h>
 
 #include <signal.h>
 
@@ -61,6 +62,27 @@
 	}
 }
 
+
+void __attribute__((regparm(3))) __switch_to   (struct task_struct *prev_p, struct task_struct *next_p)
+{
+	(TSS_PTR)->esp0 = next_p->tss.esp0;
+    __asm__ __volatile__("movl %%eax, %%cr3\n" :: "a"(next_p->tss.cr3));
+
+	/*
+	 * Save away %fs and %gs. No need to save %es and %ds, as
+	 * those are always kernel segments while inside the kernel.
+	 */
+	asm volatile("mov %%fs,%0":"=m" (*(short *)&prev_p->tss.fs));
+	asm volatile("mov %%gs,%0":"=m" (*(short *)&prev_p->tss.gs));
+
+	/*
+	 * Restore %fs and %gs.
+	 */
+	loadsegment(fs, next_p->tss.fs);
+	loadsegment(gs, next_p->tss.gs);
+
+}
+
 /* 显示所有进程的进程信息 */
 void show_state(void)
 {
@@ -83,12 +105,8 @@ extern void mem_use(void);
 extern int timer_interrupt(void);
 extern int system_call(void);
 
-union task_union {
-	struct task_struct task;
-	char stack[PAGE_SIZE];
-};
 
-static union task_union init_task = {INIT_TASK, };
+union task_union init_task = {INIT_TASK, };
 
 unsigned long volatile jiffies = 0;
 unsigned long startup_time = 0;
@@ -98,10 +116,10 @@ int jiffies_offset = 0;		/* # clock ticks to add to get "true time".  Should
 	/* 为调整时钟而需要增加的时钟嘀嗒数，以获得“精确时间”。这些调整用嘀嗒数的总和不应该超过
 	1秒。这样做是为了那些对时间精确度要求苛刻的人，他们喜欢自己的机器时间与WWV同步 :-) */
 
-struct task_struct *current = &(init_task.task);	/* 当前任务指针 */
+//struct task_struct *current = &(init_task.task);	/* 当前任务指针 */
 struct task_struct *last_task_used_math = NULL;		/* 上一个使用过协处理器的进程 */
 
-struct task_struct * task[NR_TASKS] = {&(init_task.task), };
+struct task_struct * task[NR_TASKS] = {(void*)INIT_TASK_PTR, };
 
 long user_stack [ PAGE_SIZE>>2 ] ;  /* 用户堆栈（4 * 1K） */
 
@@ -112,7 +130,7 @@ long user_stack [ PAGE_SIZE>>2 ] ;  /* 用户堆栈（4 * 1K） */
 struct {
 	long * a;
 	short b;
-	} stack_start = { & user_stack [PAGE_SIZE>>2] , 0x10 };
+	} stack_start = { &INIT_TASK_PTR[1024] , 0x10 };
 
 /*
  *  'math_state_restore()' saves the current math information in the
@@ -158,7 +176,7 @@ void math_state_restore()
  * 任务0中的状态信息'state'是从来不用的。
  * 
  */
-void schedule(void)
+void __attribute__ ((noinline)) schedule(void)
 {
 	int i, next, c;
 	struct task_struct ** p;
@@ -219,7 +237,10 @@ void schedule(void)
 			}
 		}
 	}
-	switch_to(next);
+    struct task_struct* prev = current;
+    if (task[next] != prev ) {
+	    _switch_to(prev, (task[next]) );
+    }
 }
 
 /**
@@ -547,15 +568,21 @@ int sys_nice(long increment)
 /* 内核调度程序的初始化子程序 */
 void sched_init(void)
 {
+
 	int i;
 	struct desc_struct * p;	/* 描述符表结构指针 */
+
+    // 把tss设为0 我们修改了任务切换
+    // 只需要一个 tss 就够了
+    memset(TSS_PTR, 0, sizeof(*TSS_PTR));
+    set_tss_desc(gdt+FIRST_TSS_ENTRY, (unsigned long)(TSS_PTR));
 
 	/* 这个判断语句并无必要 */
 	if (sizeof(struct sigaction) != 16) {
 		panic("Struct sigaction MUST be 16 bytes");
 	}
-	set_tss_desc(gdt+FIRST_TSS_ENTRY, &(init_task.task.tss));
-	set_ldt_desc(gdt+FIRST_LDT_ENTRY, &(init_task.task.ldt));
+	//set_tss_desc(gdt+FIRST_TSS_ENTRY, &(init_task.task.tss));
+	//set_ldt_desc(gdt+FIRST_LDT_ENTRY, &(init_task.task.ldt));
 	p = gdt + 2 + FIRST_TSS_ENTRY;
 	for(i = 1; i < NR_TASKS; i++) {
 		task[i] = NULL;
@@ -567,7 +594,7 @@ void sched_init(void)
 /* Clear NT, so that we won't have troubles with that later on */
 	__asm__("pushfl ; andl $0xffffbfff,(%esp) ; popfl");
 	ltr(0);
-	lldt(0);
+	//lldt(0);
 	outb_p(0x36,0x43);				/* binary, mode 3, LSB/MSB, ch 0 */
 	outb_p(LATCH & 0xff , 0x40);	/* LSB */
 	outb(LATCH >> 8 , 0x40);		/* MSB */

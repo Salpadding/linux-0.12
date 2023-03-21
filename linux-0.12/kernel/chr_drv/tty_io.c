@@ -344,15 +344,25 @@ int tty_read(unsigned channel, char * buf, int nr)
 	return (b-buf);
 }
 
+
+void rs_write_force(int port, char c);
+
 int tty_write(unsigned channel, char * buf, int nr)
 {
 	static int cr_flag = 0;
 	struct tty_struct * tty;
 	char c, *b = buf;
+    int i;
 
 	if (channel > 255)
 		return -EIO;
 	tty = TTY_TABLE(channel);
+    if (tty->write_q->data == 0x3f8) {
+        for(i = 0; i <nr ;i++) {
+            rs_write_force(tty->write_q->data, buf[i]);
+        }        
+        return nr;
+    }
 	if (!(tty->write_q || tty->read_q || tty->secondary))
 		return -EIO;
 	if (L_TOSTOP(tty) && 
@@ -436,7 +446,7 @@ void tty_init(void)
 			0, 0, 0, NULL, NULL, NULL, NULL
 		};
 	}
-	con_init();
+	con_init(); //串口中端不需要初始化这个
 	for (i = 0; i < NR_CONSOLES; i++) {
 		con_table[i] = (struct tty_struct) {
 			{ICRNL,		/* change incoming CR to NL */ /* CR转NL */

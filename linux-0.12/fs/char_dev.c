@@ -19,6 +19,7 @@ extern int tty_write(unsigned minor,char * buf,int count);
 typedef int (*crw_ptr)(int rw, unsigned minor, char * buf, int count, off_t * pos); /* (新增)增加函数指针的返回值int */
 
 
+
 /**
  * 串口终端读写操作
  * @param[in]	rw		读写命令

@@ -278,12 +278,13 @@ repeat:
         "movl %%ecx,%%edx\n\t"
         "movl $1024,%%ecx\n\t"
         "leal 4092(%%edx),%%edi\n\t"
+        "addl %5,%%edi\n\t"
         "rep ; stosl\n\t"
         "movl %%edx,%%eax\n"
         "1:"
         :"=a" (__res)
         :"0" (0), "i" (LOW_MEM), "c" (PAGING_PAGES),
-        "D" (mem_map + PAGING_PAGES - 1)
+        "D" (mem_map + PAGING_PAGES - 1), "i" (PAGE_OFFSET)
         );
     if (__res >= HIGH_MEMORY) {	/* 页面地址大于实际内存容量，重新寻找 */
         goto repeat;

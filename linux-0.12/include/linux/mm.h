@@ -27,7 +27,8 @@ static inline void oom(void)
 /* 刷新页变换高速缓冲（TLB）宏函数 */ 	
 /* 为了提高地址转换的效率，CPU将最近使用的页表数据存放在芯片中高速缓冲中。在修改过页表信息之后，就
  需要刷新该缓冲区。这里使用重新加载页目录基址寄存器CR3的方法来进行刷新。下面eax=0是页目录的基址。*/
-#define invalidate() __asm__("movl %%eax,%%cr3"::"a" (0))
+#define invalidate() __asm__("movl %%cr3, %%eax\n\tmovl %%eax,%%cr3":::"eax")
+//#define invalidate()
 
 /* these are not to be changed without changing head.s etc */
 #define LOW_MEM 0x100000				/* 物理内存地址低端1MB */
@@ -45,4 +46,5 @@ extern unsigned char mem_map [ PAGING_PAGES ];
 #define PAGE_RW			0x02		/* 页面读写位 */
 #define PAGE_PRESENT	0x01		/* 页面存在位 */
 
+#define UN_MANAGED(x) (((unsigned long)(x)) < LOW_MEM || ((unsigned long)(x)) >= HIGH_MEMORY)
 #endif

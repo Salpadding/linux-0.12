@@ -54,6 +54,7 @@
 #include <linux/sched.h>
 #include <linux/head.h>
 #include <linux/kernel.h>
+#include <string.h>
 
 /* 用于判断给定线性地址是否位于当前进程的代码段中，“(((addr)+4095)&~4095)”用于取得线性
  地址addr所在内存页面的末端地址 */
@@ -120,20 +121,20 @@ int free_page_tables(unsigned long from, unsigned long size)
 	if (from & 0x3fffff) {	/* 参数from给出的线性基地址是否在4MB的边界处 */
 		panic("free_page_tables called with wrong alignment");
 	}
-	if (!from) {			/* from=0说明试图释放内核和缓冲所在的物理内存空间 */
-		panic("Trying to free up swapper memory space");
-	}
 	/* 计算size指定长度所占的页目录数（4MB的进位整数倍，向上取整），例如size=4.01MB则size=2 */
 	size = (size + 0x3fffff) >> 22;
 	/* 页目录项指针 */
-	dir = (unsigned long *) ((from >> 20) & 0xffc); 			/* _pg_dir = 0 */
+	dir = PDE_OF(from); 			/* _pg_dir = 0 */
 	/* 遍历需要释放的页目录项，释放对应页表中的页表项 */
 	for ( ; size-- > 0 ; dir++) {
 		if (!(1 & *dir)) {
 			continue;
 		}
-		pg_table = (unsigned long *) (0xfffff000 & *dir);
+		pg_table = __va(0xfffff000 & *dir);
 		for (nr = 0 ; nr < 1024 ; nr++) {
+            if UN_MANAGED((*pg_table) & PAGE_UNMASK) {
+                continue;
+            }
 			if (*pg_table) {
 				if (1 & *pg_table) {	/* 在物理内存中  */
 					free_page(0xfffff000 & *pg_table);
@@ -144,7 +145,11 @@ int free_page_tables(unsigned long from, unsigned long size)
 			}
 			pg_table++;
 		}
-		free_page(0xfffff000 & *dir);
+        __asm_br(__free_pt);
+        if UN_MANAGED(((unsigned long)__pa(pg_table)) & PAGE_UNMASK){
+        } else{
+		    free_page(0xfffff000 & *dir);
+        }
 		*dir = 0;
 	}
 	invalidate();
@@ -280,17 +285,17 @@ static unsigned long put_page(unsigned long page, unsigned long address)
 		printk("mem_map disagrees with %p at %p\n", page, address);
 
 	/* 根据address从页目录表取出页表地址 */
-	page_table = (unsigned long *) ((address >> 20) & 0xffc);
+	page_table = PDE_OF(address);
 	if ((*page_table) & 1)	/* 页表存在 */
-		page_table = (unsigned long *) (0xfffff000 & *page_table);
+		page_table = PTE_OF(address);
 	else {
 		if (!(tmp = get_free_page()))
 			return 0;
 		*page_table = tmp | 7; 	/* 置位3个标志(U/S，W/R，P) */
-		page_table = (unsigned long *) tmp;
+		page_table = PTE_OF(address);
 	}
 	/* 在页表中设置页面地址，并置位3个标志(U/S，W/R，P) */
-	page_table[(address >> 12) & 0x3ff] = page | 7;
+    *page_table = page | 7;
 
 	/* no need for invalidate */
 	return page;
@@ -326,16 +331,16 @@ unsigned long put_dirty_page(unsigned long page, unsigned long address)
 		printk("Trying to put page %p at %p\n", page, address);
 	if (mem_map[(page-LOW_MEM)>>12] != 1)
 		printk("mem_map disagrees with %p at %p\n", page, address);
-	page_table = (unsigned long *) ((address >> 20) & 0xffc);
+	page_table = PDE_OF(address);
 	if ((*page_table) & 1)
-		page_table = (unsigned long *) (0xfffff000 & *page_table);
+		page_table = PTE_OF(address);
 	else {
 		if (!(tmp = get_free_page()))
 			return 0;
 		*page_table = tmp | 7;
-		page_table = (unsigned long *) tmp;
+		page_table = PTE_OF(address);
 	}
-	page_table[(address >> 12) & 0x3ff] = page | (PAGE_DIRTY | 7);
+	*page_table = page | (PAGE_DIRTY | 7);
 	
 	/* no need for invalidate */
 	return page;
@@ -358,7 +363,7 @@ unsigned long put_dirty_page(unsigned long page, unsigned long address)
 	old_page = 0xfffff000 & *table_entry;
 
 	/* 即如果该内存页面此时只被一个进程使用，就直接把属性改为可写即可 */
-	if (old_page >= LOW_MEM && mem_map[MAP_NR(old_page)] == 1) {
+	if (/*old_page >= LOW_MEM &&*/ mem_map[MAP_NR(old_page)] == 1) {
 		*table_entry |= 2;
 		invalidate();
 		return;
@@ -397,12 +402,14 @@ unsigned long put_dirty_page(unsigned long page, unsigned long address)
  */
 void do_wp_page(unsigned long error_code, unsigned long address)
 {
+    /*
 	if (address < TASK_SIZE)
 		printk("\n\rBAD! KERNEL MEMORY WP-ERR!\n\r");
 	if (address - current->start_code > TASK_SIZE) {
 		printk("Bad things happen: page error in do_wp_page\n\r");
 		do_exit(SIGSEGV);
 	}
+    */
 #if 0
 	/* we cannot do this yet: the estdio library writes to code space */
 	/* stupid, stupid. I really want the libc.a from GNU */
@@ -413,10 +420,57 @@ void do_wp_page(unsigned long error_code, unsigned long address)
 		do_exit(SIGSEGV);
 #endif
 	/* 根据线性地址计算物理页面地址 */
-	un_wp_page((unsigned long *)
-		(((address >> 10) & 0xffc) + (0xfffff000 &
-		*((unsigned long *) ((address >> 20) & 0xffc)))));
+    unsigned long volatile pa = *PDE_OF(address);
+    unsigned long i;
+    unsigned long* volatile tmp;
+    pte* volatile pte;
+    
 
+    /* 查看页表项是否为只读状态 */
+    if ((pa & PAGE_RW_MASK) == 0) {
+        // 如果是只读的话
+        // 1. 查看物理页是否是共享状态
+        // 如果不是共享状态 可以直接把页目录标记为可写
+        if (mem_map[MAP_NR(pa)] == 1 ) {
+            *PDE_OF(address) |= PAGE_RW_MASK;
+        } else {
+            // 如果是共享状态 新申请一个页面
+            pte = __va(pa & PAGE_UNMASK);
+            mem_map[MAP_NR(pa)]--;
+            tmp = __va(get_free_page());
+
+            // 与此同时把改页表项下所有的物理页标记为共享状态
+            // 加上写保护
+            for(i = 0; i < 1024; i++) {
+                if (!(pte[i] & 1)) {
+                    continue;
+                }
+                pte[i] &= PAGE_RW_UNMASK;
+                mem_map[MAP_NR(pte[i])] += 1;
+            }
+            memcpy(tmp, pte, PAGE_SIZE);
+            *PDE_OF(address) = (unsigned long)(__pa(tmp)) | 7;
+        }
+    } 
+
+    pa = *PTE_OF(address);
+    if((pa & PAGE_RW_MASK) == 0) {
+        // 如果是只读的话
+        // 1. 查看物理页是否是共享状态
+        // 如果不是共享状态 可以直接把页目录标记为可写
+        if (mem_map[MAP_NR(pa)] == 1 ) {
+            *PTE_OF(address) |= PAGE_RW_MASK;
+        } else {
+            // 如果是共享状态 新申请一个页面
+            tmp = __va(get_free_page());
+            mem_map[MAP_NR(pa)]--;
+            // 这里有个问题 用户态申请的页面可能超过3G以上
+            // 内核态无法直接访问
+            memcpy(tmp, __va(pa & PAGE_UNMASK), PAGE_SIZE);
+            *PTE_OF(address) =((unsigned long) __pa(tmp)) | 7;
+        }
+    }
+    invalidate();
 }
 
 /**
@@ -594,6 +648,7 @@ void do_no_page(unsigned long error_code, unsigned long address)
 	int block, i;
 	struct m_inode * inode;
 
+    /*
 	if (address < TASK_SIZE)
 		printk("\n\rBAD!! KERNEL PAGE MISSING\n\r");
 
@@ -601,12 +656,13 @@ void do_no_page(unsigned long error_code, unsigned long address)
 		printk("Bad things happen: nonexistent page error in do_no_page\n\r");
 		do_exit(SIGSEGV);
 	}
+    */
 	/* 1.所缺页在交换设备中，从交换设备读页面 */
-	page = *(unsigned long *) ((address >> 20) & 0xffc);	/* 取目录项内容 */
-	if (page & 1) { /* 存在位P */
+    page = *(unsigned long *) PDE_OF(address);
+	if (page & 1) {
 		page &= 0xfffff000;
 		page += (address >> 10) & 0xffc;
-		tmp = *(unsigned long *) page;						/* 取页表项内容 */
+		tmp = *(unsigned long *) page;
 		if (tmp && !(1 & tmp)) {
 			swap_in((unsigned long *) page);
 			return;
@@ -615,6 +671,7 @@ void do_no_page(unsigned long error_code, unsigned long address)
 	/* 算出address处缺页的页面地址在进程空间中的偏移长度值tmp，根据偏移值判定缺页所在进程空
 	 间位置，获取i节点和块号，用于之后从文件中加载页面 */
 	address &= 0xfffff000;
+    //printk("address = %ld start code = %ld\n", address, current->start_code);
 	tmp = address - current->start_code;
 	if (tmp >= LIBRARY_OFFSET ) { 		/* 缺页在库映像文件中 */
 		inode = current->library;
@@ -644,7 +701,7 @@ void do_no_page(unsigned long error_code, unsigned long address)
 	/* 记住，程序头占用1个数据块（用于解释上面 block = 1+ ...） */
 	for (i = 0 ; i < 4 ; block++, i++)
 		nr[i] = bmap(inode, block); /* 获取设备逻辑块号 */
-	bread_page(page, inode->i_dev, nr);
+	bread_page(__va(page), inode->i_dev, nr);
 
 	/* 读取执行程序最后一页（实际不满一页），把超出end_data后的部分进行清零处理，若该页面离执行程序末端
 	 超过1页，说明是从库文件中读取的，因此不用执行清零操作 */
@@ -657,8 +714,10 @@ void do_no_page(unsigned long error_code, unsigned long address)
 		*(char *)tmp = 0;
 	}
 	/* 把引起缺页异常的一页物理页面映射到指定线性地址address处 */
-	if (put_page(page, address))
+	if (put_page(page, address)) {
+        __asm_br(__do_no_page);
 		return;
+    }
 	/* 否则释放物理页面，显示内存不够 */
 	free_page(page);
 	oom();
@@ -754,3 +813,5 @@ void show_mem(void)
 	}
 	printk("Memory found: %d (%d)\n\r\n\r", free - shared, total);
 }
+
+

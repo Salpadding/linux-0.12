@@ -23,7 +23,7 @@
 #error "TASK_SIZE*NR_TASKS must be 4GB"
 #endif
 
-#define LIBRARY_OFFSET (TASK_SIZE - LIBRARY_SIZE)	/* 动态库被加载的位置 */
+#define LIBRARY_OFFSET (PAGE_OFFSET - LIBRARY_SIZE)	/* 动态库被加载的位置 */
 
 #define CT_TO_SECS(x)	((x) / HZ)					/* 滴答数转换成秒 */
 #define CT_TO_USECS(x)	(((x) % HZ) * 1000000/HZ)	/* 滴答数转换成微秒 */
@@ -43,6 +43,10 @@
 #error "Currently the close-on-exec-flags and select masks are in one long, max 32 files/proc"
 #endif
 
+// 固定死的 tss 从低特权级往高特权级跳的时候会用到
+#define TSS_PTR ((struct tss_struct*)(__va(18UL<<20))) 
+// 首个进程页表
+#define INIT_TASK_PTR ((unsigned long*)__va(19UL<<20))
 #define TASK_RUNNING			0	/* 任务正在运行或已准备就绪 */
 #define TASK_INTERRUPTIBLE		1	/* 任务处于可中断等待状态 */
 #define TASK_UNINTERRUPTIBLE	2	/* 任务处于不可中断等待状态 */
@@ -61,8 +65,24 @@ extern void schedule(void);
 extern void trap_init(void);
 extern void panic(const char * str);
 extern int tty_write(unsigned minor,char * buf,int count);
+extern void system_call_2();
 
 typedef int (*fn_ptr)();
+
+struct pt_regs {
+    unsigned long ebx;
+    unsigned long ecx;
+    unsigned long edx;
+    unsigned long eax;
+    unsigned long fs;
+    unsigned long es;
+    unsigned long ds;
+    unsigned long eip;
+    unsigned long cs;
+    unsigned long eflags;
+    unsigned long esp;
+    unsigned long ss;
+};
 
 struct i387_struct {
 	long	cwd;
@@ -201,9 +221,9 @@ struct task_struct {
 /* ldt */	{0x9f,0xc0fa00}, \
 		{0x9f,0xc0f200}, \
 	}, \
-/*tss*/	{0,PAGE_SIZE+(long)&init_task,0x10,0,0,0,0,(long)&pg_dir,\
+/*tss*/	{0, ((unsigned long)INIT_TASK_PTR) + PAGE_SIZE ,0x10,0,0,0,0,PD_OF(0),\
 	 0,0,0,0,0,0,0,0, \
-	 0,0,0x17,0x17,0x17,0x17,0x17,0x17, \
+	 0,0,0x10,0x10,0x10,0x10,0x10,0x10, \
 	 _LDT(0),0x80000000, \
 		{} \
 	}, \
@@ -211,7 +231,7 @@ struct task_struct {
 
 extern struct task_struct *task[NR_TASKS];	/* 任务指针数组 */
 extern struct task_struct *last_task_used_math;	/* 上一个使用过协处理器的进程 */
-extern struct task_struct *current;			/* 当前运行进程结构指针变量 */
+//extern struct task_struct *current;			/* 当前运行进程结构指针变量 */
 extern unsigned long volatile jiffies;		/* 从开机开始算起的滴答数 */
 extern unsigned long startup_time;			/* 开机时间，从1970:0:0:0:0开始计时的秒数 */
 extern int jiffies_offset;					/* 用于累计需要调整的时间滴答数 */
@@ -224,12 +244,19 @@ extern void interruptible_sleep_on(struct task_struct ** p);
 extern void wake_up(struct task_struct ** p);
 extern int in_group_p(gid_t grp);
 
+union task_union {
+	struct task_struct task;
+	char stack[PAGE_SIZE];
+};
+
+
+extern union task_union init_task;
 /*
  * Entry into gdt where to find first TSS. 0-nul, 1-cs, 2-ds, 3-syscall
  * 4-TSS0, 5-LDT0, 6-TSS1 etc ...
  */
 /* 全局表中任务0的状态段(TSS)和局部描述符表(LDT)的描述符的选择符索引号 */
-#define FIRST_TSS_ENTRY 4
+#define FIRST_TSS_ENTRY 8
 #define FIRST_LDT_ENTRY (FIRST_TSS_ENTRY+1)
 
 /* 每个描述符占8字节，因此FIRST_TSS_ENTRY<<3表示该描述符在GDT表中的起始偏移位置。
@@ -270,6 +297,8 @@ __asm__("cmpl %%ecx,current\n\t"			 	\
 	::"m" (*&__tmp.a),"m" (*&__tmp.b), 			\
 	"d" (_TSS(n)),"c" ((long) task[n])); 		\
 }
+
+#include <linux/sched_extra.h>
 
 /* 页面地址对准（在内核代码中没有任何地方引用!!）*/
 #define PAGE_ALIGN(n) (((n)+0xfff)&0xfffff000)

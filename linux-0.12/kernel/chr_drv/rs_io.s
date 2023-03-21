@@ -32,7 +32,7 @@ startup	= 256		/* chars left in write queue when we restart it */
  */
 .align 2
 rs1_interrupt:
-	pushl $table_list+8
+	pushl $table_list+8 # &table_list[2]
 	jmp rs_int
 .align 2
 rs2_interrupt:
@@ -49,16 +49,16 @@ rs_int:
 	pushl $0x10
 	pop %es
 	movl 24(%esp),%edx
-	movl (%edx),%edx
-	movl rs_addr(%edx),%edx
+	movl (%edx),%edx # table_list[2]
+	movl rs_addr(%edx),%edx # table_list[2]->data 也就是 0x3f8
 	addl $2,%edx		/* interrupt ident. reg */
 rep_int:
 	xorl %eax,%eax
 	inb %dx,%al
-	testb $1,%al
-	jne end
-	cmpb $6,%al		/* this shouldn't happen, but ... */
-	ja end
+	testb $1,%al # 
+	jne end # 确保 al 最后一位是 0
+	andb $6,%al		/* this shouldn't happen, but ... */
+	jz end # happens when $al > 6
 	movl 24(%esp),%ecx
 	pushl %edx
 	subl $2,%edx

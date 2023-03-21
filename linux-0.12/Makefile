@@ -17,7 +17,7 @@ LD86	= $(QUIET_LINK)ld86 -0
 # -M: 用于输出符号表
 # -e startup_32(新增): 指定入口
 # -Ttext 0(新增): 使`startup_32`标号对应的地址为`0x0`
-LDFLAGS	= -M -x -Ttext 0 -e startup_32
+LDFLAGS	= -M -Ttext 0xc0000000 -e startup_32
 
 CC	+= $(RAMDISK)
 
@@ -29,7 +29,7 @@ CC	+= $(RAMDISK)
 # -fcombine-regs(去除): 不再被gcc支持
 # -mstring-insns(去除): Linus本人增加的选项(gcc中没有)
 # -fno-builtin(新增): 阻止gcc会把没有参数的printf优化成puts
-CFLAGS	= -g -Wall -O -fstrength-reduce -fomit-frame-pointer -fno-builtin
+CFLAGS	= -g -Wall -O0 -fstrength-reduce -fomit-frame-pointer -fno-builtin
 
 # -Iinclude: 通过-I指定在该项目的include文件夹中搜索
 CPP	+= -Iinclude
@@ -55,6 +55,8 @@ LIBS	=lib/lib.a
 .c.o:
 	$(CC) $(CFLAGS) \
 	-nostdinc -Iinclude -c -o $*.o $<
+.S.s:
+	$(CPP) -D__ASSEMBLY__ -Iinclude -o $@ $<
 
 all:	Image
 
@@ -79,6 +81,7 @@ tools/build: tools/build.c
 	$(CC) $(CFLAGS) \
 	-o tools/build tools/build.c
 
+boot/head.s: boot/head.S
 boot/head.o: boot/head.s
 
 tools/system:	boot/head.o init/main.o \
@@ -133,6 +136,16 @@ clean:
 	(cd fs;make clean)
 	(cd kernel;make clean)
 	(cd lib;make clean)
+
+docker:
+	docker run -it --rm -v `pwd`:`pwd` --workdir `pwd` docker.io/ultraji/ubuntu-xfce-novnc make
+
+tags:
+	ctags -R
+
+qemu:
+	#qemu-system-i386 -m 32 -boot a -blockdev driver=file,node-name=f0,filename=Image -device floppy,drive=f0 -drive file=../oslab/hdc.img,index=0,media=disk,format=raw 
+	qemu-system-i386 -smp 1 -m 128 -boot a -fda Image -hda ../oslab/hdc.img -nographic -serial mon:stdio -s -S -echr 0x14
 
 backup: clean
 	(cd .. ; tar cf - linux | compress - > backup.Z)

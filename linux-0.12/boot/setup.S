@@ -280,6 +280,7 @@ chsvga:	cld
 	mov	es,ax
 	lea	si,msg1
 	call	prtstr
+    jmp svga
 nokey:	
 	in	al,#0x60
 	cmp	al,#0x82
@@ -632,15 +633,15 @@ gdt:
 	.word	0,0,0,0		! dummy	;第1个描述符，不用
 
 	; 在GDT表的偏移量是0x08。它是内核代码段选择符的值。
-	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
+	.word	0xFFFF		! 8Mb - limit=2047 (2048*4096=8Mb)
 	.word	0x0000		! base address=0
 	.word	0x9A00		! code read/exec		; 代码段为只读，可执行
-	.word	0x00C0		! granularity=4096, 386 ; 颗粒度4K，32位
+	.word	0x00CF		! granularity=4096, 386 ; 颗粒度4K，32位
 
-	.word	0x07FF		! 8Mb - limit=2047 (2048*4096=8Mb)
+	.word	0xFFFF		! 8Mb - limit=2047 (2048*4096=8Mb)
 	.word	0x0000		! base address=0
 	.word	0x9200		! data read/write		; 数据段为可读可写
-	.word	0x00C0		! granularity=4096, 386	; 颗粒度4K，32位
+	.word	0x00CF		! granularity=4096, 386	; 颗粒度4K，32位
 
 ; 加载中断描述符表寄存器指令lidt要求的6字节操作数。
 ; 注：CPU要求在进入保护模式之前需设置idt表，因此这里先设置一个长度为0的空表。

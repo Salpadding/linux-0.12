@@ -408,11 +408,11 @@ static struct m_inode * get_dir(const char * pathname, struct m_inode * inode)
             iput(inode);
             return NULL;
         }
-        for(namelen=0;(c=get_fs_byte(pathname++))&&(c!='/');namelen++)
+        for(namelen=0;(c=get_fs_byte(pathname++))&&(c!='/');namelen++) // pathname: dev/tty1 -> tty1
             /* nothing */ ;
         if (!c)
             return inode;
-        if (!(bh = find_entry(&inode,thisname,namelen,&de))) {
+        if (!(bh = find_entry(&inode,thisname,namelen,&de))) { // thisname[0:3] = dev
             iput(inode);
             return NULL;
         }

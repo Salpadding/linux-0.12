@@ -618,6 +618,7 @@ void buffer_init(long buffer_end)
 	else {
 		b = (void *) buffer_end;
 	}
+    b = __va(b);
 	while ( (b -= BLOCK_SIZE) >= ((void *) (h+1)) ) {
 		h->b_dev = 0;
 		h->b_dirt = 0;
@@ -634,8 +635,8 @@ void buffer_init(long buffer_end)
 		h ++;
 		NR_BUFFERS ++;
 		/* 同样为了跳过 640KB~1MB 的内存空间 */
-		if (b == (void *) 0x100000)
-			b = (void *) 0xA0000;
+		if (b == __va( 0x100000))
+			b = __va(0xA0000);
 	}
 	h --;						/* 让h指向最后一个有效缓冲块头 */
 	free_list = start_buffer;	/* 让空闲链表头指向头一个缓冲块 */

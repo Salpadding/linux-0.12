@@ -21,6 +21,7 @@
 #include <linux/kernel.h>
 #include <asm/segment.h>
 #include <asm/system.h>
+#include <asm/memory.h>
 
 /* 写页面验证 */
 extern void write_verify(unsigned long address);
@@ -63,6 +64,29 @@ void verify_area(void * addr, int size)
 */
 static int copy_mem(int nr, struct task_struct * p)
 {
+    int i;
+    pde* dst = __va(PD_OF(nr));
+    p->tss.cr3 = (unsigned long)(__pa(dst));
+    pde* src = PDE_OF(0);
+    if(1) {
+        // 用户态加上写保护
+        for(i = 0; i < 768; i++) {
+            src[i] &= PAGE_RW_UNMASK;
+            dst[i] = src[i];
+            // 页目录下的标记为共享
+            if (src[i] & 1) {
+                mem_map[MAP_NR(src[i])] += 1;
+            }
+        }
+        // 内核页表不需要写保护
+        for(i = 768; i < 1023; i++) {
+            dst[i] = src[i];
+        }
+        // 页目录自映射
+        dst[1023] = (unsigned long)(__pa(dst)) | 3;
+        invalidate();
+        return 0;
+    }
     unsigned long old_data_base, new_data_base, data_limit;
     unsigned long old_code_base, new_code_base, code_limit;
 
@@ -107,10 +131,7 @@ static int copy_mem(int nr, struct task_struct * p)
  * @param[in]	eip,cs,eflags,esp,ss            CPU执行中断指令压入的用户栈地址ss和esp，标志eflags和返回地址cs和eip
  * @return      成功返回最新的PID，失败返回错误号
  */
-int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
-        long ebx, long ecx, long edx, long orig_eax, 
-        long fs, long es, long ds,
-        long eip, long cs, long eflags, long esp, long ss)
+int copy_process(int nr, long ebp, long edi, long esi, long gs, long none, struct pt_regs regs)
 {
     struct task_struct *p;
     int i;
@@ -120,11 +141,12 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
     if (!p) {
         return -EAGAIN;
     }
-    task[nr] = p;
+    p = __va(p);
     *p = *current;	    /* NOTE! this doesn't copy the supervisor stack */
-
     /* 对复制来的进程结构内容进行一些修改。先将新进程的状态置为不可中断等待状态，以防止内核调度其执行 */
     p->state = TASK_UNINTERRUPTIBLE;
+    task[nr] = p;
+
     p->pid = last_pid;
     p->counter = p->priority;
     p->signal = 0;
@@ -136,25 +158,16 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
 
     /* 修改任务状态段TSS内容 */
     p->tss.back_link = 0;
+    struct pt_regs* volatile childregs =(struct pt_regs*) (((unsigned long)p) + PAGE_SIZE) - 1;
+    // 不加 volatile, childregs 会被优化到寄存器上 被 memcpy 改
+    memcpy(&childregs[0], (void*)&regs, sizeof(struct pt_regs));
+    childregs->eax = 0;
+
+
     p->tss.esp0 = PAGE_SIZE + (long) p; /* (PAGE_SIZE + (long) p)让esp0正好指向该页顶端 */
     p->tss.ss0 = 0x10;
-    p->tss.eip = eip;
-    p->tss.eflags = eflags;
-    p->tss.eax = 0;
-    p->tss.ecx = ecx;
-    p->tss.edx = edx;
-    p->tss.ebx = ebx;
-    p->tss.esp = esp;
-    p->tss.ebp = ebp;
-    p->tss.esi = esi;
-    p->tss.edi = edi;
-    p->tss.es = es & 0xffff;
-    p->tss.cs = cs & 0xffff;
-    p->tss.ss = ss & 0xffff;
-    p->tss.ds = ds & 0xffff;
-    p->tss.fs = fs & 0xffff;
-    p->tss.gs = gs & 0xffff;
-    p->tss.ldt = _LDT(nr);
+    p->tss.eip = &system_call_2;
+    p->tss.esp = childregs;
     p->tss.trace_bitmap = 0x80000000;
     /* 当前任务使用了协处理器，就保存其上下文 */
     if (last_task_used_math == current) {
@@ -186,8 +199,8 @@ int copy_process(int nr, long ebp, long edi, long esi, long gs, long none,
     }
 
     /* 在GDT表中设置任务状态段描述符TSS和局部表描述符LDT */
-    set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(p->tss));
-    set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY, &(p->ldt));
+    //set_tss_desc(gdt+(nr<<1)+FIRST_TSS_ENTRY, &(p->tss));
+    //set_ldt_desc(gdt+(nr<<1)+FIRST_LDT_ENTRY, &(p->ldt));
 
     /* 设置子进程的进程指针 */
     p->p_pptr = current;

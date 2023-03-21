@@ -147,7 +147,7 @@ static long main_memory_start = 0;		/* 主内存开始的位置 */
 static char term[32];					/* 终端设置字符串 */
 
 /* 读取并执行/etc/rc文件时所使用的命令行参数和环境参数 */
-static char * argv_rc[] = { "/bin/sh", NULL };
+static char * argv_rc[] = { "/usr/bin/printf", "hello world %s\\n", "111", NULL };
 static char * envp_rc[] = { "HOME=/", NULL ,NULL };
 
 /* 运行登录shell时所使用的命令行和环境参数 */
@@ -157,6 +157,15 @@ static char * envp[] = { "HOME=/usr/root", NULL, NULL };
 
 /* 用于存放硬盘参数表 */
 struct drive_info { char dummy[32]; } drive_info;
+
+int do_idle() {
+    while(1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+
+// serial.c 输出到串口 busy wait 
+void print_com1(const char* s);
 
 /* 内核初始化主程序 （void -> int 去除编译警告，实际为void） */
 int main(void)		/* This really is void, no error here. */
@@ -169,6 +178,7 @@ int main(void)		/* This really is void, no error here. */
 /*
  * 此时中断还被禁止的，做完必要的设置后就将其开启。
  */
+    memcpy(INIT_TASK_PTR, &init_task.task, sizeof(init_task.task));
 	ROOT_DEV = ORIG_ROOT_DEV;
 	SWAP_DEV = ORIG_SWAP_DEV;
 	sprintf(term, "TERM=con%dx%d", CON_COLS, CON_ROWS);
@@ -208,10 +218,18 @@ int main(void)		/* This really is void, no error here. */
 	floppy_init();							/* 软驱初始化 */
 
 	sti();									/* 开启中断 */
+
+    TSS_PTR->ss0 = current->tss.ss0;
+    TSS_PTR->esp0 = current->tss.esp0;
+    current->tss.eip = (unsigned long)&do_idle;
 	move_to_user_mode();
+
 	if (!fork()) {							/* we count on this going ok */
 		/* 创建任务1（init进程） */
-		init();
+        init();
+        for(;;) {
+            __asm__("int $0x80"::"a" (__NR_pause));
+        }
 	}
 /*
  *   NOTE!!   For any other task 'pause()' would mean we have to get a
@@ -245,6 +263,8 @@ int printf(const char *fmt, ...)
 	return i;
 }
 
+
+void print_com1(const char* s);
 /* init()函数主要完成4件事：
  *		1. 安装根文件系统
  *		2. 显示系统信息
@@ -257,7 +277,7 @@ void init(void)
 
 	setup((void *) &drive_info);
 
-	(void) open("/dev/tty1", O_RDWR, 0);	/* stdin */
+	(void) open(DEFAULT_TTY, O_RDWR, 0);	/* stdin */
 	(void) dup(0);							/* stdout */
 	(void) dup(0);							/* stderr */
 
@@ -271,9 +291,12 @@ void init(void)
 		if (open("/etc/rc", O_RDONLY, 0)) {
 			_exit(1);
 		}
-		execve("/bin/sh", argv_rc, envp_rc);
+		execve("/usr/bin/printf", argv_rc, envp_rc);
 		_exit(2);
 	}
+
+    while(1);
+
 
 	if (pid > 0) {	/* init进程等待任务2退出 */
 		while (pid != wait(&i)) {
@@ -291,7 +314,7 @@ void init(void)
 		if (!pid) {
 			close(0);close(1);close(2);
 			setsid();
-			(void) open("/dev/tty1", O_RDWR, 0);
+			(void) open(DEFAULT_TTY, O_RDWR, 0);
 			(void) dup(0);
 			(void) dup(0);
 			_exit(execve("/bin/sh", argv, envp));

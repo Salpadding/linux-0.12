@@ -36,12 +36,26 @@ static void init(int port)
 
 void rs_init(void)
 {
-	set_intr_gate(0x24,rs1_interrupt);
-	set_intr_gate(0x23,rs2_interrupt);
-	init(tty_table[64].read_q->data);
-	init(tty_table[65].read_q->data);
+	set_intr_gate(0x24,rs1_interrupt); // 串口1
+	set_intr_gate(0x23,rs2_interrupt); // 串口2
+	init(tty_table[64].read_q->data); // 0x3f8 即串口1
+	init(tty_table[65].read_q->data); // 
 	outb(inb_p(0x21)&0xE7,0x21);
 }
+
+void rs_write_force(int port, char c) {
+    while ((inb(port + 5) & 0x20) == 0);
+    outb(c, port);
+}
+
+// 必须在内核态下执行
+void print_com1(const char* s) {
+    while(*s) {
+        rs_write_force(0x3f8,*s);
+        s++;
+    }
+}
+
 
 /*
  * This routine gets called when tty_write has put something into
@@ -54,7 +68,11 @@ void rs_write(struct tty_struct * tty)
 {
 	cli();
 	if (!EMPTY(tty->write_q)) {
-		outb(inb_p(tty->write_q->data+1)|0x02,tty->write_q->data+1);
+		outb(
+                inb_p(tty->write_q->data+1)|0x02, // inb_p(0x3f8 + 2) 
+                tty->write_q->data+1 
+        );
+        // outb(inb_p(0x3f8+2), 0x3f8 +1)
 	}
 	sti();
 }

@@ -3,19 +3,20 @@
 /* 利用iret指令实现从内核模式移到用户模式去执行初始任务0 */
 #define move_to_user_mode()						\
 __asm__ (										\
-	"movl %%esp,%%eax\n\t"						\
-	"pushl $0x17\n\t"							\
-	"pushl %%eax\n\t"							\
+	"pushl $0x2b\n\t"							\
+    "pushl %0\n\t"               \
 	"pushfl\n\t"								\
-	"pushl $0x0f\n\t"							\
-	"pushl $1f\n\t"								\
-	"iret\n"									\
-"1:\tmovl $0x17,%%eax\n\t"						\
+	"pushl $0x23\n\t"							\
+	"movl $1f, %%eax\n\t"								\
+	"subl $0x00000000, %%eax\n\t"								\
+    "pushl %%eax\n\t" \
+	"\n\tiret\n"									\
+"1:\tmovl $0x2b,%%eax\n\t"						\
 	"mov %%ax,%%ds\n\t"							\
 	"mov %%ax,%%es\n\t"							\
 	"mov %%ax,%%fs\n\t"							\
 	"mov %%ax,%%gs"								\
-	:::"ax")
+	::"i"(LIBRARY_OFFSET):"ax")
 
 #define sti() __asm__ ("sti"::)			/* 开中断 */
 #define cli() __asm__ ("cli"::)			/* 关中断 */

@@ -17,6 +17,7 @@
 static char buf[1024];	/* 显示用的临时缓冲区 */
 
 extern int vsprintf(char * buf, const char * fmt, va_list args);
+extern void print_com1(const char* s);
 
 /* 内核使用的显示函数 */
 int printk(const char *fmt, ...)
@@ -27,6 +28,7 @@ int printk(const char *fmt, ...)
 	va_start(args, fmt);
 	i = vsprintf(buf, fmt, args);
 	va_end(args);
-	console_print(buf);
+	//console_print(buf);
+    print_com1(buf);
 	return i;
 }

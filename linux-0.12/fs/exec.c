@@ -158,6 +158,47 @@ static int count(char ** argv)
 	return i;
 }
 
+static void* copy_strings_2(
+    int argc, char** argv, 
+    int envc, char** envp,
+    unsigned long *page
+) {
+    unsigned long size = (argc + 1) * 4 + (envc + 1) * 4;
+    unsigned long i;
+    unsigned long* array; // 存的物理地址
+    unsigned long str;
+    for(i = 0; i < argc; i++) {
+        size += strlen(argv[i]) + 1;
+    }
+    for(i = 0; i < envc; i++) {
+        size += strlen(envp[i]) + 1;
+    }
+    
+    if (size >= PAGE_SIZE) {
+        printk("args too large");
+        panic("args too larget");
+    }
+    page[0] = get_free_page();
+    array = __va(page[0]);
+    str = (argc + 1) * 4 + (envc + 1) * 4;
+
+    for(i = 0; i < argc; i++) {
+        *array = str;
+        strcpy(__va(page[0]) + str, argv[i]);
+        str += strlen(argv[i]) + 1;
+        array++;
+    }
+    *array = 0;
+    array++;
+    for(i = 0; i < envc; i++) {
+        *array = str;
+        strcpy(__va(page[0]) + str, envp[i]);
+        str += strlen(envp[i]) + 1;
+        array++;
+    }
+    return 0;
+} 
+
 /*
  * 'copy_string()' copies argument/envelope strings from user
  * memory to free pages in kernel mem. These are in a format ready
@@ -201,7 +242,7 @@ static int count(char ** argv)
  * @param[in]	argv		参数指针数组
  * @param[in]	page		参数和环境空间页面指针数组
  * @param[in]	p           参数表空间中偏移指针，始终指向已复制串的头部
- * @param[in]	from_kmem   字符串来源标志
+ * @param[in]	from_kmem   字符串来源标志 我们现在用higher half kernel 不需要这个了
  * @retval		成功返回参数和环境空间当前头部指针，出错返回0
  */
 static unsigned long copy_strings(int argc, char ** argv, unsigned long *page,
@@ -217,18 +258,23 @@ static unsigned long copy_strings(int argc, char ** argv, unsigned long *page,
 	new_fs = get_ds();
 	old_fs = get_fs();
 	if (from_kmem == 2) {
-		set_fs(new_fs);
+		// set_fs(new_fs);
 	}
 	/* 从最后一个参数逆向开始复制 */
 	while (argc-- > 0) {
 		if (from_kmem == 1) {
-			set_fs(new_fs);
+			//set_fs(new_fs);
 		}
-		if (!(tmp = (char *)get_fs_long(((unsigned long *)argv) + argc))) {
+		if (!(
+            tmp = (char *)
+            get_fs_long(
+                ((unsigned long *)argv) + argc
+            )
+        )) {
 			panic("argc is wrong");
 		}
 		if (from_kmem == 1) {
-			set_fs(old_fs);
+			//set_fs(old_fs);
 		}
 		len = 0;		/* remember zero-padding */ /* 串是以NULL结尾的 */
 		do {
@@ -236,30 +282,31 @@ static unsigned long copy_strings(int argc, char ** argv, unsigned long *page,
 		} while (get_fs_byte(tmp++));
 		/* 不会发生，参数表空间够大（128KB） */
 		if (p - len < 0) {	/* this shouldn't happen - 128kB */
-			set_fs(old_fs);
+			// set_fs(old_fs);
 			return 0;
 		}
 		/* 把参数对应的字符串中的逐个字符（从尾到头）地复制到参数和环境空间末端处 */
 		while (len) {
 			--p; --tmp; --len;
+            // 快慢指针
 			if (--offset < 0) {
 				offset = p % PAGE_SIZE;
 				if (from_kmem == 2) {
-					set_fs(old_fs);
+					//set_fs(old_fs);
 				}
 				if (!(pag = (char *) page[p/PAGE_SIZE]) &&
 				    !(pag = (char *) (page[p/PAGE_SIZE] = get_free_page()))) {
 					return 0;
 				}
 				if (from_kmem == 2) {
-					set_fs(new_fs);
+					//set_fs(new_fs);
 				}
 			}
-			*(pag + offset) = get_fs_byte(tmp);
+			*(((unsigned char*)__va(pag)) + offset) = get_fs_byte(tmp);
 		}
 	}
 	if (from_kmem == 2) {
-		set_fs(old_fs);
+		//set_fs(old_fs);
 	}
 	return p;
 }
@@ -272,31 +319,50 @@ static unsigned long copy_strings(int argc, char ** argv, unsigned long *page,
  * @param[in]	page		参数和环境空间页面指针数组
  * @retval		数据段限长值(64MB)
  */
-static unsigned long change_ldt(unsigned long text_size, unsigned long * page)
+static unsigned long change_ldt(unsigned long text_size, unsigned long * page, int argc, int envc)
 {
-	unsigned long code_limit, data_limit, code_base, data_base;
-	int i;
-
-	code_limit = TASK_SIZE;
-	data_limit = TASK_SIZE;
-	code_base = get_base(current->ldt[1]);
-	data_base = code_base;
-	set_base(current->ldt[1], code_base);
-	set_limit(current->ldt[1], code_limit);
-	set_base(current->ldt[2], data_base);
-	set_limit(current->ldt[2], data_limit);
+//
+//	code_limit = TASK_SIZE;
+//	data_limit = TASK_SIZE;
+//	code_base = get_base(current->ldt[1]);
+//	data_base = code_base;
+//	set_base(current->ldt[1], code_base);
+//	set_limit(current->ldt[1], code_limit);
+//	set_base(current->ldt[2], data_base);
+//	set_limit(current->ldt[2], data_limit);
 /* make sure fs points to the NEW data segment */
 	/* FS段寄存器中放入局部表数据段描述符的选择符(0x17) */
-	__asm__("pushl $0x17\n\tpop %%fs"::);
+	//__asm__("pushl $0x17\n\tpop %%fs"::);
 	/* 将参数和环境空间已存放数据的页面（最多有MAX_ARG_PAGES页）放到数据段末端 */
-	data_base += data_limit - LIBRARY_SIZE; /* 库文件代码占用进程空间末端部分 */
-	for (i = MAX_ARG_PAGES - 1; i >= 0; i--) {
-		data_base -= PAGE_SIZE;
-		if (page[i]) {
-			put_dirty_page(page[i], data_base);
-		}
-	}
-	return data_limit;
+
+    unsigned long* ptr;
+    unsigned long stack_page = get_free_page();
+    int i;
+	put_dirty_page(page[0], PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE);
+    put_dirty_page(stack_page, PAGE_OFFSET - LIBRARY_SIZE - 2 * PAGE_SIZE);
+
+    // 调整
+    ptr = (void*)(PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE);
+    for(i = 0; i < argc; i++) {
+        *ptr +=  PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE;
+        ptr++;
+    }
+    ptr++;
+    for(i = 0; i < envc; i++) {
+        *ptr +=  PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE;
+        ptr++;
+    }
+
+    ptr = (void*)(PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE);
+
+    // envp
+    *(--ptr) = PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE + (argc+1) * 4;
+    // argv
+    *(--ptr) = PAGE_OFFSET - LIBRARY_SIZE - PAGE_SIZE;
+    // argc
+    *(--ptr) = (unsigned long)argc;
+
+	return (unsigned long)ptr;
 }
 
 /*
@@ -336,7 +402,7 @@ int do_execve(unsigned long * eip, long tmp, char * filename,
 	/* 参数eip[1]是调用本次系统调用的原用户程序代码段寄存器CS值，其中的段选择符当然必须是
 	当前任务的代码段选择符（0x000f）。 若不是该值，那么CS只能会是内核代码段的选择符0x0008。
 	但这是绝对不允许的，因为内核代码是常驻内存而不能被替换掉的。*/
-	if ((0xffff & eip[1]) != 0x000f) {
+	if ((3 & eip[1]) != 3) {
 		panic("execve called from supervisor mode");
 	}
 	for (i = 0; i < MAX_ARG_PAGES; i++) {	/* clear page-table */
@@ -378,6 +444,7 @@ restart_interp:
 	}
 
 	ex = *((struct exec *) bh->b_data);	/* read exec-header */
+    __asm_br("sal_ex");
 	/* “#!”开头则为脚本文件 */
 	if ((bh->b_data[0] == '#') && (bh->b_data[1] == '!') && (!sh_bang)) {
 		/*
@@ -459,16 +526,17 @@ restart_interp:
 		 */
 		/* namei是从用户数据空间（fs指向）取参数的，而interp处于内核数据空间，故临时设置fs
 		 指向内核空间 */
-		old_fs = get_fs();
-		set_fs(get_ds());
+		//old_fs = get_fs();
+		//set_fs(get_ds());
 		if (!(inode = namei(interp))) { /* get executables inode */
-			set_fs(old_fs);
+			//set_fs(old_fs);
 			retval = -ENOENT;
 			goto exec_error1;
 		}
-		set_fs(old_fs);
+		//set_fs(old_fs);
 		goto restart_interp;
 	}
+
 	brelse(bh);
 	/* 对这个内核来说，它仅支持ZMAGIC执行文件格式，不支持含有代码或数据重定位信息的执
 	行文件，执行文件实在太大或者执行文件残缺不全也不行 */
@@ -484,13 +552,9 @@ restart_interp:
 		goto exec_error2;
 	}
 	if (!sh_bang) {
-		p = copy_strings(envc, envp, page, p, 0);
-		p = copy_strings(argc, argv, page, p, 0);
-		if (!p) {
-			retval = -ENOMEM;
-			goto exec_error2;
-		}
+        copy_strings_2(argc, argv, envc, envp, page);
 	}
+    __asm_br(exe5);
 /* OK, This is the point of no return */
 /* note that current->library stays unchanged by an exec */
 /* OK，下面开始就没有返回的地方了 */
@@ -516,15 +580,12 @@ restart_interp:
 	}
 	current->close_on_exec = 0;
 	/* 释放原进程的代码段和数据段占用的物理页面及页表 */
-	free_page_tables(get_base(current->ldt[1]), get_limit(0x0f));
-	free_page_tables(get_base(current->ldt[2]), get_limit(0x17));
+	free_page_tables(0, PAGE_OFFSET);
 	if (last_task_used_math == current) {
 		last_task_used_math = NULL;
 	}
 	current->used_math = 0;
-	p += change_ldt(ex.a_text, page);
-	p -= LIBRARY_SIZE + MAX_ARG_PAGES * PAGE_SIZE;
-	p = (unsigned long) create_tables((char *)p, argc, envc);
+	p = change_ldt(ex.a_text, page, argc, envc);
 	current->brk = ex.a_bss +
 		(current->end_data = ex.a_data +
 		(current->end_code = ex.a_text));
@@ -535,6 +596,7 @@ restart_interp:
 	 替换为新执行文件的栈指针 */
 	eip[0] = ex.a_entry;		/* eip, magic happens :-) */
 	eip[3] = p;					/* stack pointer */
+    __asm_br(__exe6);
 	return 0;
 exec_error2:
 	iput(inode);
